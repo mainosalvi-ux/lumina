@@ -5,13 +5,16 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
-  // Merge system process.env with loaded env to ensure injected secrets are captured
-  const api_key = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  // Capturar cualquier variante de la clave de API
+  const api_key = env.GEMINI_API_KEY || 
+                  process.env.GEMINI_API_KEY || 
+                  env.VITE_GEMINI_API_KEY || 
+                  process.env.VITE_GEMINI_API_KEY;
   
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(api_key),
+      'process.env.GEMINI_API_KEY': JSON.stringify(api_key || ""),
     },
     resolve: {
       alias: {
