@@ -4,24 +4,19 @@
  */
 
 import { useState } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
-import { Search, Loader2, Sparkles } from "lucide-react";
+import { Search, Loader2, Sparkles, BookText } from "lucide-react";
 
-// Lazy initialization of Gemini API
-let aiInstance: GoogleGenAI | null = null;
-const getAI = () => {
-  // En Vite, process.env.GEMINI_API_KEY será reemplazado por la clave real durante el build
-  const key = process.env.GEMINI_API_KEY;
-  
-  if (!key || key === "" || key === "undefined") {
-    throw new Error("API Key no detectada. Asegúrate de configurar VITE_GEMINI_API_KEY en Vercel y hacer un RE-DEPLOY.");
-  }
-  if (!aiInstance) {
-    aiInstance = new GoogleGenAI({ apiKey: key });
-  }
-  return aiInstance;
-};
+interface Verse {
+  number: number;
+  text: string;
+}
+
+interface BibleData {
+  book: string;
+  chapter: number;
+  versiculous: Verse[];
+}
 
 interface VerseResult {
   verses: { text: string; reference: string }[];
@@ -29,6 +24,15 @@ interface VerseResult {
   referenceRange: string;
   version: string;
 }
+
+// Lista de palabras comunes en español que ignoraremos para las palabras clave
+const STOP_WORDS = new Set([
+  'que', 'los', 'las', 'del', 'con', 'por', 'para', 'una', 'uno', 'unos', 
+  'donde', 'cuando', 'quien', 'como', 'pero', 'entonces', 'sobre', 'este', 
+  'esta', 'estos', 'estas', 'entre', 'todo', 'todos', 'toda', 'todas',
+  'porque', 'pues', 'aunque', 'aquí', 'allá', 'ante', 'bajo', 'cabe',
+  'desde', 'hacia', 'hasta', 'según', 'vuestro', 'nuestro', 'suya', 'suyo'
+]);
 
 export default function App() {
   const [book, setBook] = useState('');
@@ -38,6 +42,19 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Función simple para extraer palabras clave del texto
+  const extractKeywords = (text: string) => {
+    const words = text
+      .toLowerCase()
+      .replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
+      .split(/\s+/)
+      .filter(word => word.length > 4 && !STOP_WORDS.has(word));
+    
+    // Contar frecuencia o simplemente devolver las más largas/únicas
+    const uniqueWords = Array.from(new Set(words));
+    return uniqueWords.sort((a, b) => b.length - a.length).slice(0, 4);
+  };
 
   const fetchVerse = async () => {
     if (!book || !chapter || !verseStart) {
@@ -49,42 +66,39 @@ export default function App() {
     setError(null);
     setResult(null);
 
-    const rangeText = verseEnd ? `desde el versículo ${verseStart} hasta el ${verseEnd}` : `el versículo ${verseStart}`;
-
     try {
-      const ai = getAI();
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Proporciona el texto de los versículos bíblicos de ${book} capítulo ${chapter}, ${rangeText} en la versión Reina Valera 1960. 
-        Además, extrae 3 o 4 palabras clave o conceptos espirituales importantes del texto.
-        Responde exclusivamente con un objeto JSON (sin markdown) que tenga la siguiente estructura:
-        {
-          "verses": [
-            { "text": "texto versiculo 1", "reference": "v1" },
-            { "text": "texto versiculo 2", "reference": "v2" }
-          ],
-          "keywords": ["palabra1", "palabra2", "palabra3"],
-          "referenceRange": "Libro Capítulo:Inicio-Fin",
-          "version": "Reina-Valera 1960"
-        }`,
-        config: {
-          responseMimeType: "application/json"
-        }
+      // Limpiar el nombre del libro para la API
+      const cleanBook = book.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      
+      // Llamar a una API pública que no requiere Key
+      const url = `https://bible-api.deno.dev/api/read/rvr1960/${cleanBook}/${chapter}/${verseStart}${verseEnd ? `-${verseEnd}` : ''}`;
+      
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Referencia no encontrada. Revisa el libro y números.");
+      
+      const data = await response.json();
+      
+      // La API devuelve un array si es rango, o un objeto si es uno solo
+      const versesData = Array.isArray(data) ? data : [data];
+      
+      const verses = versesData.map((v: any) => ({
+        text: v.verse,
+        reference: v.number.toString()
+      }));
+
+      const fullText = verses.map(v => v.text).join(' ');
+      const keywords = extractKeywords(fullText);
+
+      setResult({
+        verses,
+        keywords: keywords.length > 0 ? keywords : ["FE", "VIDA", "PAZ"],
+        referenceRange: `${book.toUpperCase()} ${chapter}:${verseStart}${verseEnd ? `-${verseEnd}` : ''}`,
+        version: "Reina Valera 1960"
       });
 
-      const data = JSON.parse(response.text || '{}');
-      if (data.verses && data.verses.length > 0) {
-        setResult(data);
-      } else {
-        throw new Error("No se pudo encontrar el contenido solicitado.");
-      }
     } catch (err) {
       console.error(err);
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Hubo un error al buscar los versículos.");
-      }
+      setError("No pudimos encontrar esos versículos. Prueba con: Juan 3 16");
     } finally {
       setLoading(false);
     }
@@ -102,14 +116,14 @@ export default function App() {
         {/* Header */}
         <header className="flex justify-center items-center py-8 mb-8 border-b border-gold/20">
           <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
             className="flex flex-col items-center gap-2"
           >
-            <span className="font-serif italic text-2xl md:text-3xl tracking-[0.3em] text-gold uppercase">
+            <span className="font-serif italic text-3xl md:text-4xl tracking-[0.4em] text-gold uppercase drop-shadow-lg">
               Lumina
             </span>
-            <div className="w-12 h-0.5 bg-gold/30" />
+            <div className="text-[10px] tracking-[0.6em] text-gold/40 uppercase font-bold mt-1">Escrituras Offline</div>
           </motion.div>
         </header>
 
@@ -118,64 +132,60 @@ export default function App() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-wrap items-end justify-center gap-4 bg-white/5 backdrop-blur-md border border-white/10 p-8 rounded-[24px] w-full max-w-5xl"
+            className="flex flex-wrap items-end justify-center gap-4 bg-white/5 backdrop-blur-md border border-white/10 p-8 rounded-[32px] w-full max-w-5xl shadow-2xl"
           >
             <div className="flex-1 min-w-[180px]">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold">
-                Libro
-              </label>
+              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold">Libro</label>
               <input
                 type="text"
                 placeholder="Ej. Juan"
                 value={book}
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setBook(e.target.value)}
-                className="w-full bg-black/30 border border-gold/30 rounded-lg py-3 px-4 text-white focus:border-gold outline-none transition-all placeholder:text-white/20"
+                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-4 text-white focus:border-gold outline-none transition-all placeholder:text-white/20"
               />
             </div>
             
-            <div className="w-20">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">
-                Cap.
-              </label>
+            <div className="w-24">
+              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Cap.</label>
               <input
                 type="text"
                 placeholder="3"
                 value={chapter}
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setChapter(e.target.value)}
-                className="w-full bg-black/30 border border-gold/30 rounded-lg py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
+                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
               />
             </div>
 
-            <div className="w-20">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">
-                Desde
-              </label>
+            <div className="w-24">
+              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Desde</label>
               <input
                 type="text"
                 placeholder="16"
                 value={verseStart}
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setVerseStart(e.target.value)}
-                className="w-full bg-black/30 border border-gold/30 rounded-lg py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
+                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
               />
             </div>
 
-            <div className="w-20">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">
-                Hasta
-              </label>
+            <div className="w-24">
+              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Hasta</label>
               <input
                 type="text"
                 placeholder="(Opc)"
                 value={verseEnd}
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setVerseEnd(e.target.value)}
-                className="w-full bg-black/30 border border-gold/30 rounded-lg py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center text-xs"
+                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
               />
             </div>
 
             <button
               onClick={fetchVerse}
               disabled={loading}
-              className="bg-gold text-dark-bg px-8 py-3.5 rounded-lg font-bold uppercase tracking-widest text-xs hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
+              className="bg-gold text-dark-bg px-10 py-3.5 rounded-xl font-bold uppercase tracking-widest text-xs hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
             >
               Consultar
             </button>
@@ -185,7 +195,7 @@ export default function App() {
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="mt-6 text-gold/80 text-[11px] uppercase tracking-widest font-medium text-center bg-red-900/20 px-4 py-2 rounded-lg border border-red-500/20"
+              className="mt-6 text-gold text-[10px] uppercase tracking-[0.2em] font-bold text-center bg-red-900/40 px-6 py-2.5 rounded-full border border-red-500/30"
             >
               {error}
             </motion.p>
@@ -200,39 +210,46 @@ export default function App() {
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.8, ease: "easeOut" }}
+                transition={{ duration: 1, ease: "circOut" }}
                 className="w-full max-w-4xl"
               >
                 {/* Keywords Bar */}
-                <div className="flex flex-wrap justify-center gap-3 mb-12">
+                <div className="flex flex-wrap justify-center gap-4 mb-16">
                   {result.keywords.map((kw, i) => (
-                    <span 
+                    <motion.span 
                       key={i} 
-                      className="px-4 py-1.5 rounded-full border border-gold/20 text-[10px] uppercase tracking-[0.2em] text-gold/60 backdrop-blur-sm"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: i * 0.1 }}
+                      className="px-6 py-2 rounded-lg bg-gold/5 border border-gold/10 text-[10px] uppercase tracking-[0.3em] text-gold/80 font-bold"
                     >
                       {kw}
-                    </span>
+                    </motion.span>
                   ))}
                 </div>
 
-                <div className="space-y-8 text-center">
+                <div className="space-y-12 text-center">
                   <div className="relative inline-block px-4">
-                    <p className="font-serif text-2xl md:text-3xl leading-relaxed text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.15)] italic max-w-3xl mx-auto">
+                    <p className="font-serif text-2xl md:text-4xl leading-relaxed text-white drop-shadow-2xl italic max-w-4xl mx-auto selection:bg-gold selection:text-black">
                       {result.verses.map((v, i) => (
-                        <span key={i} className="inline-block hover:text-gold transition-colors duration-300">
-                          {v.text} <sup className="text-gold/40 text-[10px] ml-1 mr-2">{v.reference}</sup>
+                        <span key={i} className="inline-block px-1">
+                          {v.text} <sup className="text-gold/50 text-xs ml-1 mr-3 font-sans not-italic font-bold">{v.reference}</sup>
                         </span>
                       ))}
                     </p>
                   </div>
                   
-                  <div className="flex flex-col items-center gap-4 pt-8 border-t border-white/5">
-                    <h2 className="text-lg md:text-xl tracking-[0.2em] text-gold uppercase font-medium">
+                  <div className="flex flex-col items-center gap-6 pt-12 border-t border-gold/10">
+                    <div className="p-3 rounded-full border border-gold/20">
+                      <BookText className="w-6 h-6 text-gold/60" />
+                    </div>
+                    <h2 className="text-2xl md:text-3xl tracking-[0.3em] text-gold uppercase font-serif italic">
                       {result.referenceRange}
                     </h2>
-                    <div className="flex items-center gap-2 text-[9px] uppercase tracking-[0.4em] text-gold/40">
-                      <Sparkles className="w-3 h-3" />
+                    <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.5em] text-white/20 font-bold">
+                      <div className="h-px w-8 bg-gold/20" />
                       <span>{result.version}</span>
+                      <div className="h-px w-8 bg-gold/20" />
                     </div>
                   </div>
                 </div>
@@ -241,12 +258,12 @@ export default function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="text-gold/40 flex flex-col items-center gap-4 py-24"
+                className="text-gold/30 flex flex-col items-center gap-6 py-32"
               >
-                <div className="p-4 rounded-full border border-gold/10">
-                  <Sparkles className="w-8 h-8" />
+                <div className="p-6 rounded-full border border-gold/5 animate-pulse">
+                  <Sparkles className="w-12 h-12" />
                 </div>
-                <p className="text-xs tracking-[0.4em] uppercase text-center">Escribe una referencia para iluminar el camino</p>
+                <p className="text-xs tracking-[0.6em] uppercase text-center font-bold">Revela la verdad eterna</p>
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -255,21 +272,20 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex flex-col items-center gap-4 text-gold py-24"
+              className="flex flex-col items-center gap-6 py-32 text-gold"
             >
               <div className="relative">
-                <Loader2 className="w-10 h-10 animate-spin opacity-50" />
-                <div className="absolute inset-0 blur-md bg-gold/20 rounded-full animate-pulse" />
+                <Loader2 className="w-12 h-12 animate-spin opacity-40" />
+                <div className="absolute inset-0 blur-xl bg-gold/30 rounded-full animate-pulse" />
               </div>
-              <p className="text-[10px] tracking-[0.3em] uppercase opacity-60">Consultando Lumina...</p>
+              <p className="text-[10px] tracking-[0.5em] uppercase opacity-40 font-bold">Accediendo a la Fuente...</p>
             </motion.div>
           )}
         </main>
 
-        {/* Footer Hint */}
         <footer className="mt-24 text-center">
-          <p className="text-[11px] tracking-[0.2em] text-white/30 uppercase font-light">
-            Explora la sabiduría milenaria en alta definición
+          <p className="text-[10px] tracking-[0.4em] text-white/20 uppercase font-black">
+            Lumina • RVR1960 • Sin IA • Funciona en todo lugar
           </p>
         </footer>
       </div>
