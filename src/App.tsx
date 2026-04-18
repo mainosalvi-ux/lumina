@@ -8,8 +8,18 @@ import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Loader2, Sparkles } from "lucide-react";
 
-// Initialize Gemini API
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Lazy initialization of Gemini API
+let aiInstance: GoogleGenAI | null = null;
+const getAI = () => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === 'MY_GEMINI_API_KEY') {
+    throw new Error("Falta la API Key de Gemini. Configúrala en las variables de entorno como GEMINI_API_KEY.");
+  }
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({ apiKey: key });
+  }
+  return aiInstance;
+};
 
 interface VerseResult {
   text: string;
@@ -36,6 +46,7 @@ export default function App() {
     setResult(null);
 
     try {
+      const ai = getAI();
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Proporciona el texto del versículo bíblico: ${book} ${chapter}:${verse} en la versión Reina Valera 1960. 
@@ -58,7 +69,11 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      setError("Hubo un error al buscar el versículo. Asegúrate de que la referencia sea válida.");
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Hubo un error al buscar el versículo. Asegúrate de tener una API Key válida y que la referencia sea correcta.");
+      }
     } finally {
       setLoading(false);
     }
