@@ -1,21 +1,15 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * Lumina - Sagradas Escrituras
+ * Versión estable para Vercel (Sin IA / Sin Keys)
  */
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from "motion/react";
-import { Search, Loader2, Sparkles, BookText } from "lucide-react";
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from "framer-motion";
+import { Loader2, Sparkles, BookText, Share2, Info } from "lucide-react";
 
 interface Verse {
   number: number;
   text: string;
-}
-
-interface BibleData {
-  book: string;
-  chapter: number;
-  versiculous: Verse[];
 }
 
 interface VerseResult {
@@ -25,7 +19,6 @@ interface VerseResult {
   version: string;
 }
 
-// Lista de palabras comunes en español que ignoraremos para las palabras clave
 const STOP_WORDS = new Set([
   'que', 'los', 'las', 'del', 'con', 'por', 'para', 'una', 'uno', 'unos', 
   'donde', 'cuando', 'quien', 'como', 'pero', 'entonces', 'sobre', 'este', 
@@ -42,251 +35,308 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const [searchCount, setSearchCount] = useState(0);
 
-  // Función simple para extraer palabras clave del texto
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const extractKeywords = (text: string) => {
     const words = text
       .toLowerCase()
       .replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
       .split(/\s+/)
-      .filter(word => word.length > 4 && !STOP_WORDS.has(word));
+      .filter(word => word.length > 5 && !STOP_WORDS.has(word));
     
-    // Contar frecuencia o simplemente devolver las más largas/únicas
+    // Devolver palabras únicas y significativas
     const uniqueWords = Array.from(new Set(words));
     return uniqueWords.sort((a, b) => b.length - a.length).slice(0, 4);
   };
 
   const fetchVerse = async () => {
     if (!book || !chapter || !verseStart) {
-      setError("Por favor, completa al menos el libro, capítulo y versículo inicial.");
+      setError("Indica el libro, capítulo y versículo.");
       return;
     }
 
     setLoading(true);
     setError(null);
     setResult(null);
+    setSearchCount(prev => prev + 1);
 
     try {
-      // Limpiar el nombre del libro para la API
-      const cleanBook = book.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      
-      // Llamar a una API pública que no requiere Key
-      const url = `https://bible-api.deno.dev/api/read/rvr1960/${cleanBook}/${chapter}/${verseStart}${verseEnd ? `-${verseEnd}` : ''}`;
-      
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Referencia no encontrada. Revisa el libro y números.");
-      
-      const data = await response.json();
-      
-      // La API devuelve un array si es rango, o un objeto si es uno solo
-      const versesData = Array.isArray(data) ? data : [data];
-      
-      const verses = versesData.map((v: any) => ({
-        text: v.verse,
-        reference: v.number.toString()
-      }));
+      // Normalización flexible
+      let cleanBook = book.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      cleanBook = cleanBook.replace(/\s+/g, "");
 
-      const fullText = verses.map(v => v.text).join(' ');
-      const keywords = extractKeywords(fullText);
+      const range = verseEnd ? `${verseStart}-${verseEnd}` : verseStart;
+      
+      // Intentar con múltiples versiones comunes (rvr1960, rv1960, nvi, rva)
+      const versions = ['rvr1960', 'rv1960'];
+      let lastError = null;
 
-      setResult({
-        verses,
-        keywords: keywords.length > 0 ? keywords : ["FE", "VIDA", "PAZ"],
-        referenceRange: `${book.toUpperCase()} ${chapter}:${verseStart}${verseEnd ? `-${verseEnd}` : ''}`,
-        version: "Reina Valera 1960"
-      });
+      for (const ver of versions) {
+        try {
+          const url = `https://bible-api.deno.dev/api/read/${ver}/${cleanBook}/${chapter}/${range}`;
+          const response = await fetch(url);
+          
+          if (response.ok) {
+            const data = await response.json();
+            processResult(data, book, chapter, range, ver === 'rvr1960' ? "Reina Valera 1960" : "Reina Valera 1960 (Mirror)");
+            return; // Éxito
+          }
+        } catch (e) {
+          lastError = e;
+        }
+      }
 
-    } catch (err) {
+      // Si fallan las versiones, intentar capitalizado
+      const capitalizedBook = cleanBook.charAt(0).toUpperCase() + cleanBook.slice(1);
+      for (const ver of versions) {
+        try {
+          const url = `https://bible-api.deno.dev/api/read/${ver}/${capitalizedBook}/${chapter}/${range}`;
+          const response = await fetch(url);
+          
+          if (response.ok) {
+            const data = await response.json();
+            processResult(data, book, chapter, range, ver === 'rvr1960' ? "Reina Valera 1960" : "Reina Valera 1960 (Mirror)");
+            return; // Éxito
+          }
+        } catch (e) {
+          lastError = e;
+        }
+      }
+
+      throw new Error(`Referencia no encontrada: "${book} ${chapter}:${range}". Revisa que el libro esté bien escrito o intenta con otro libro.`);
+
+    } catch (err: any) {
       console.error(err);
-      setError("No pudimos encontrar esos versículos. Prueba con: Juan 3 16");
+      setError(err.message || "Error al conectar con la fuente sagrada.");
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div className="relative min-h-screen w-full overflow-x-hidden pt-12 pb-24 font-sans selection:bg-gold/30">
-      {/* Immersive Background */}
-      <div className="fixed inset-0 z-0 bg-[radial-gradient(circle_at_50%_20%,#1a2436_0%,#080a0f_70%)]" />
-      
-      {/* Spotlight Effect */}
-      <div className="fixed top-[-10%] left-1/2 -translate-x-1/2 w-[600px] h-[400px] z-0 pointer-events-none bg-[radial-gradient(ellipse_at_50%_0%,rgba(212,175,55,0.15)_0%,transparent_70%)]" />
+  const processResult = (data: any, originalBook: string, originalChapter: string, originalRange: string, versionLabel: string) => {
+    const versesData = Array.isArray(data) ? data : [data];
+    
+    // Eliminar posibles duplicados de la API por seguridad
+    const uniqueVerses = versesData.filter((v, index, self) => 
+      index === self.findIndex((t) => t.number === v.number)
+    );
 
-      <div className="relative z-10 max-w-5xl mx-auto px-6">
-        {/* Header */}
-        <header className="flex justify-center items-center py-8 mb-8 border-b border-gold/20">
+    const verses = uniqueVerses.map((v: any) => ({
+      text: v.verse,
+      reference: v.number.toString()
+    }));
+
+    const fullText = verses.map(v => v.text).join(' ');
+    const keywords = extractKeywords(fullText);
+
+    setResult({
+      verses,
+      keywords: keywords.length > 0 ? keywords : ["ETERNIDAD", "JUSTICIA", "AMOR"],
+      referenceRange: `${originalBook.toUpperCase()} ${originalChapter}:${originalRange}`,
+      version: versionLabel
+    });
+  };
+
+  if (!mounted) return null;
+
+  return (
+    <div className="relative min-h-screen w-full overflow-hidden bg-[#080a0f] text-[#e0e0e0] font-sans">
+      {/* Atmosphere Layer - Recipe 7 Inspired */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <div className="absolute inset-0 bg-[#080a0f]" />
+        <div className="absolute inset-0 opacity-40 mix-blend-screen bg-[radial-gradient(circle_at_50%_30%,#1a2436_0%,transparent_70%)]" />
+        <div className="absolute bottom-[-10%] left-[-10%] w-[60%] h-[60%] blur-[120px] rounded-full bg-gold/5" />
+        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] blur-[100px] rounded-full bg-blue-900/10" />
+      </div>
+
+      <div className="relative z-10 max-w-6xl mx-auto px-6 pt-12 pb-24 min-h-screen flex flex-col">
+        {/* Navigation / Brand */}
+        <header className="flex flex-col items-center mb-16">
           <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center gap-2"
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center"
           >
-            <span className="font-serif italic text-3xl md:text-4xl tracking-[0.4em] text-gold uppercase drop-shadow-lg">
+            <h1 className="text-4xl md:text-5xl font-serif italic tracking-[0.5em] text-gold uppercase mb-2 drop-shadow-[0_0_15px_rgba(212,175,55,0.3)]">
               Lumina
-            </span>
-            <div className="text-[10px] tracking-[0.6em] text-gold/40 uppercase font-bold mt-1">Escrituras Offline</div>
+            </h1>
+            <div className="flex items-center gap-4">
+              <div className="h-px w-8 bg-gold/20" />
+              <p className="text-[10px] tracking-[0.6em] text-gold/40 uppercase font-bold">Sagradas Escrituras</p>
+              <div className="h-px w-8 bg-gold/20" />
+            </div>
           </motion.div>
         </header>
 
-        {/* Controls Panel */}
-        <section className="mb-16 flex flex-col items-center">
+        {/* Search Engine - Glass Panel */}
+        <div className="w-full flex justify-center mb-20">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-wrap items-end justify-center gap-4 bg-white/5 backdrop-blur-md border border-white/10 p-8 rounded-[32px] w-full max-w-5xl shadow-2xl"
+            className="w-full max-w-4xl bg-white/[0.02] backdrop-blur-3xl border border-white/[0.05] p-1.5 rounded-[40px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] flex flex-wrap md:flex-nowrap items-center gap-2"
           >
-            <div className="flex-1 min-w-[180px]">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold">Libro</label>
+            <div className="flex-1 min-w-[150px] relative px-4 py-2">
+              <span className="absolute -top-3 left-6 text-[8px] uppercase tracking-widest text-[#666] font-bold px-1">Libro</span>
               <input
                 type="text"
-                placeholder="Ej. Juan"
+                placeholder="Juan..."
                 value={book}
-                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setBook(e.target.value)}
-                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-4 text-white focus:border-gold outline-none transition-all placeholder:text-white/20"
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
+                className="w-full bg-transparent border-none py-2 outline-none text-white font-serif italic text-lg placeholder:text-white/5"
               />
             </div>
             
-            <div className="w-24">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Cap.</label>
+            <div className="w-20 md:w-24 border-l border-white/5 relative px-2 py-2">
+              <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] uppercase tracking-widest text-[#666] font-bold px-1 whitespace-nowrap">Cap.</span>
               <input
                 type="text"
-                placeholder="3"
+                placeholder="1"
                 value={chapter}
-                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setChapter(e.target.value)}
-                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
+                className="w-full bg-transparent border-none py-2 text-center outline-none text-white font-bold placeholder:text-white/5"
               />
             </div>
 
-            <div className="w-24">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Desde</label>
+            <div className="w-20 md:w-24 border-l border-white/5 relative px-2 py-2">
+              <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] uppercase tracking-widest text-[#666] font-bold px-1 whitespace-nowrap">Vers.</span>
               <input
                 type="text"
-                placeholder="16"
+                placeholder="1"
                 value={verseStart}
-                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setVerseStart(e.target.value)}
-                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
+                className="w-full bg-transparent border-none py-2 text-center outline-none text-gold font-black placeholder:text-white/5"
               />
             </div>
 
-            <div className="w-24">
-              <label className="block text-[10px] uppercase tracking-widest text-[#888] mb-2 font-bold text-center">Hasta</label>
+            <div className="w-20 md:w-24 border-l border-white/5 relative px-2 py-2">
+              <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] uppercase tracking-widest text-[#666] font-bold px-1 whitespace-nowrap">Hasta</span>
               <input
                 type="text"
-                placeholder="(Opc)"
+                placeholder="..."
                 value={verseEnd}
-                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
                 onChange={(e) => setVerseEnd(e.target.value)}
-                className="w-full bg-black/40 border border-gold/20 rounded-xl py-3 px-2 text-white focus:border-gold outline-none transition-all placeholder:text-white/20 text-center"
+                onKeyDown={(e) => e.key === 'Enter' && fetchVerse()}
+                className="w-full bg-transparent border-none py-2 text-center outline-none text-white/30 text-xs placeholder:text-white/5"
               />
             </div>
 
             <button
               onClick={fetchVerse}
               disabled={loading}
-              className="bg-gold text-dark-bg px-10 py-3.5 rounded-xl font-bold uppercase tracking-widest text-xs hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
+              className="bg-gold hover:brightness-110 text-[#080a0f] h-14 w-14 md:h-16 md:w-24 rounded-[32px] flex items-center justify-center transition-all active:scale-95 disabled:opacity-20 shadow-[0_0_20px_rgba(212,175,55,0.2)] group"
             >
-              Consultar
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" /> }
             </button>
           </motion.div>
+        </div>
 
-          {error && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="mt-6 text-gold text-[10px] uppercase tracking-[0.2em] font-bold text-center bg-red-900/40 px-6 py-2.5 rounded-full border border-red-500/30"
-            >
-              {error}
-            </motion.p>
-          )}
-        </section>
-
-        <main className="min-h-[400px] flex flex-col items-center">
+        {/* Display Area */}
+        <main className="flex-1 flex flex-col items-center">
           <AnimatePresence mode="wait">
+            {error && (
+              <motion.div
+                key="error-message"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                className="bg-red-500/5 border border-red-500/20 px-8 py-3 rounded-full text-red-500 text-[10px] uppercase tracking-[0.2em] font-black mb-12 backdrop-blur-sm"
+              >
+                {error}
+              </motion.div>
+            )}
+
             {result ? (
               <motion.div
-                key={result.referenceRange}
-                initial={{ opacity: 0, y: 30 }}
+                key={`result-${result.referenceRange}-${searchCount}`}
+                initial={{ opacity: 0, y: 40 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 1, ease: "circOut" }}
-                className="w-full max-w-4xl"
+                exit={{ opacity: 0, scale: 0.98 }}
+                transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1] }}
+                className="w-full"
               >
-                {/* Keywords Bar */}
-                <div className="flex flex-wrap justify-center gap-4 mb-16">
+                {/* Spiritual Pillars (Keywords) */}
+                <div className="flex flex-wrap justify-center gap-6 mb-20">
                   {result.keywords.map((kw, i) => (
-                    <motion.span 
-                      key={i} 
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: i * 0.1 }}
-                      className="px-6 py-2 rounded-lg bg-gold/5 border border-gold/10 text-[10px] uppercase tracking-[0.3em] text-gold/80 font-bold"
+                    <motion.div
+                      key={`kw-${kw}-${i}-${searchCount}`}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 0.6 }}
+                      transition={{ delay: 0.4 + i * 0.1 }}
+                      className="text-[9px] uppercase tracking-[0.6em] text-gold font-black border-b border-gold/10 pb-1.5"
                     >
                       {kw}
-                    </motion.span>
+                    </motion.div>
                   ))}
                 </div>
 
-                <div className="space-y-12 text-center">
-                  <div className="relative inline-block px-4">
-                    <p className="font-serif text-2xl md:text-4xl leading-relaxed text-white drop-shadow-2xl italic max-w-4xl mx-auto selection:bg-gold selection:text-black">
+                {/* Holy Text */}
+                <div className="text-center space-y-16">
+                  <div className="relative">
+                    <p className="font-serif italic text-3xl md:text-5xl leading-[1.6] text-white/95 selection:bg-gold/30 max-w-5xl mx-auto drop-shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
                       {result.verses.map((v, i) => (
-                        <span key={i} className="inline-block px-1">
-                          {v.text} <sup className="text-gold/50 text-xs ml-1 mr-3 font-sans not-italic font-bold">{v.reference}</sup>
+                        <span key={`verse-${v.reference}-${i}`} className="inline-block px-1.5 transition-all duration-700 hover:text-gold hover:scale-[1.02] cursor-default">
+                          {v.text}
+                          <sup className="text-gold/40 text-xs ml-1 font-sans not-italic font-bold select-none">{v.reference}</sup>
                         </span>
                       ))}
                     </p>
                   </div>
-                  
-                  <div className="flex flex-col items-center gap-6 pt-12 border-t border-gold/10">
-                    <div className="p-3 rounded-full border border-gold/20">
-                      <BookText className="w-6 h-6 text-gold/60" />
-                    </div>
-                    <h2 className="text-2xl md:text-3xl tracking-[0.3em] text-gold uppercase font-serif italic">
-                      {result.referenceRange}
-                    </h2>
-                    <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.5em] text-white/20 font-bold">
-                      <div className="h-px w-8 bg-gold/20" />
-                      <span>{result.version}</span>
-                      <div className="h-px w-8 bg-gold/20" />
+
+                  <div className="flex flex-col items-center gap-8 pt-20">
+                    <div className="w-12 h-px bg-gold/10" />
+                    <div className="space-y-4">
+                      <h2 className="text-2xl md:text-3xl tracking-[0.5em] text-gold uppercase font-serif italic drop-shadow-lg">
+                        {result.referenceRange}
+                      </h2>
+                      <div className="flex items-center justify-center gap-4 text-[9px] uppercase tracking-[0.7em] text-white/10 font-black">
+                        <div className="h-px w-4 bg-white/5" />
+                        <BookText className="w-3 h-3" />
+                        <span>{result.version}</span>
+                        <div className="h-px w-4 bg-white/5" />
+                      </div>
                     </div>
                   </div>
                 </div>
-              </motion.div>
-            ) : !loading ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-gold/30 flex flex-col items-center gap-6 py-32"
-              >
-                <div className="p-6 rounded-full border border-gold/5 animate-pulse">
-                  <Sparkles className="w-12 h-12" />
+
+                {/* Micro Actions */}
+                <div className="flex justify-center gap-10 mt-24 opacity-10 hover:opacity-40 transition-opacity duration-1000">
+                   <button className="flex items-center gap-3 text-[9px] uppercase tracking-widest hover:text-gold transition-colors">
+                     <Share2 className="w-3.5 h-3.5" /> Compartir
+                   </button>
+                   <button className="flex items-center gap-3 text-[9px] uppercase tracking-widest hover:text-gold transition-colors">
+                     <Info className="w-3.5 h-3.5" /> Detalles
+                   </button>
                 </div>
-                <p className="text-xs tracking-[0.6em] uppercase text-center font-bold">Revela la verdad eterna</p>
+              </motion.div>
+            ) : !loading && !error ? (
+              <motion.div
+                key="welcome-message"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.15 }}
+                className="flex flex-col items-center gap-8 py-32 cursor-default select-none"
+              >
+                <div className="relative">
+                   <Sparkles className="w-16 h-16 text-gold animate-[pulse_5s_infinite]" />
+                   <div className="absolute inset-0 blur-[60px] bg-gold/30 rounded-full" />
+                </div>
+                <p className="text-[10px] tracking-[0.9em] uppercase font-black text-gold">Escudriñad las Escrituras</p>
               </motion.div>
             ) : null}
           </AnimatePresence>
-
-          {loading && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex flex-col items-center gap-6 py-32 text-gold"
-            >
-              <div className="relative">
-                <Loader2 className="w-12 h-12 animate-spin opacity-40" />
-                <div className="absolute inset-0 blur-xl bg-gold/30 rounded-full animate-pulse" />
-              </div>
-              <p className="text-[10px] tracking-[0.5em] uppercase opacity-40 font-bold">Accediendo a la Fuente...</p>
-            </motion.div>
-          )}
         </main>
 
-        <footer className="mt-24 text-center">
-          <p className="text-[10px] tracking-[0.4em] text-white/20 uppercase font-black">
-            Lumina • RVR1960 • Sin IA • Funciona en todo lugar
-          </p>
+        <footer className="mt-auto pt-16 border-t border-white/[0.02] text-center">
+           <p className="text-[9px] tracking-[0.8em] text-white/5 uppercase font-black">
+             Lumina • In Perpetuum • RVR1960
+           </p>
         </footer>
       </div>
     </div>
