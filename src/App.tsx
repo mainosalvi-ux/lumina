@@ -12,8 +12,8 @@ import { Search, Loader2, Sparkles } from "lucide-react";
 let aiInstance: GoogleGenAI | null = null;
 const getAI = () => {
   const key = process.env.GEMINI_API_KEY;
-  if (!key || key === 'MY_GEMINI_API_KEY') {
-    throw new Error("Falta la API Key de Gemini. Configúrala en las variables de entorno como GEMINI_API_KEY.");
+  if (!key) {
+    throw new Error("API Key no configurada. Por favor, añade GEMINI_API_KEY en los secretos/variables de entorno.");
   }
   if (!aiInstance) {
     aiInstance = new GoogleGenAI({ apiKey: key });
