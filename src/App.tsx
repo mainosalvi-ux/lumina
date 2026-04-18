@@ -11,9 +11,11 @@ import { Search, Loader2, Sparkles } from "lucide-react";
 // Lazy initialization of Gemini API
 let aiInstance: GoogleGenAI | null = null;
 const getAI = () => {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    throw new Error("API Key no configurada. Por favor, añade GEMINI_API_KEY en los secretos/variables de entorno.");
+  // Intentar obtener la clave de múltiples fuentes para máxima compatibilidad
+  const key = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  
+  if (!key || key === 'undefined') {
+    throw new Error("API Key no configurada. Debes añadir GEMINI_API_KEY en las variables de entorno de Vercel y hacer un RE-DEPLOY.");
   }
   if (!aiInstance) {
     aiInstance = new GoogleGenAI({ apiKey: key });
